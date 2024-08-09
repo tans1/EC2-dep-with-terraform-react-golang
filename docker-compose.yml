@@ -1,0 +1,115 @@
+version: "3.8"
+
+networks:
+  app-network:
+    name: app-network
+    driver: "bridge"
+
+services:
+  react-app:
+    # build:
+    #   context: ./react-app
+    #   dockerfile: Dockerfile
+    image:
+    ports:
+      - "3000:4173"
+    container_name: react-app
+    environment:
+      # - VITE_BASE_URL=http://golang:8080
+      - VITE_BASE_URL=
+    depends_on:
+      - golang
+    networks:
+      - app-network
+
+  golang:
+    # build:
+    #   context: ./golang
+    #   dockerfile: Dockerfile
+
+    image: 
+    container_name: golang
+    restart: always
+    environment:
+      - PORT=8080
+      - DB_USER=root
+      - DB_PASSWORD=12345678
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=golang
+      - JWT_SECRET_KEY=secretkey
+      - REDIS_DB=0
+      - REDIS_ADDR="redis:6379"
+      - REDIS_PASS=12345678
+    ports:
+      - "4000:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+    networks:
+      - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512M"
+
+  mysql:
+    image: mysql:latest
+    environment:
+      - MYSQL_ROOT_PASSWORD=12345678
+      - MYSQL_DATABASE=golang
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "33066:3306"
+    container_name: mysqlDb
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p12345678"
+        ]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+
+    networks:
+      - app-network
+
+  redis:
+    image: redis/redis-stack-server:latest
+    command: >
+      redis-server --maxmemory 1gb
+                   --maxmemory-policy allkeys-lru
+                   --protected-mode no
+                   --requirepass 12345678
+    ports:
+      - "6379:6379"
+    container_name: redis
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "-p", "6379", "ping"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 5s
+
+volumes:
+  mysql-data:

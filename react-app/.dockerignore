@@ -1,0 +1,6 @@
+.env
+node_modules
+todo.todo
+
+*.todo
+*.log

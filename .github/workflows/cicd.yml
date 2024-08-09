@@ -1,0 +1,91 @@
+name: Deploy Containers
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push React app image
+      run: |
+        docker build -t react-ec2:latest ./react-app/
+        docker tag react-ec2:latest tofikabdu/react-ec2:latest
+        docker push tofikabdu/react-ec2:latest
+
+    - name: Build and push Golang app image
+      run: |
+        docker build -t golang-ec2:latest ./golang/
+        docker tag golang-ec2:latest tofikabdu/golang-ec2:latest
+        docker push tofikabdu/golang-ec2:latest
+
+
+    - name: Install jq
+      run: sudo apt-get install -y jq
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Start SSM session to the instance
+      id: ssm-session
+      run: |
+        COMMAND_ID=$(aws ssm send-command \
+            --instance-ids ${{ secrets.INSTANCE_ID }} \
+            --document-name "AWS-RunShellScript" \
+            --comment "Executing Docker operations" \
+            --parameters 'commands=[
+              "echo Hello from GitHub Actions!",
+              "echo Ready to run docker commands",
+              "cd /apps",
+              "docker pull tofikabdu/react-ec2:latest",
+              "docker pull tofikabdu/golang-ec2:latest",
+              "docker-compose up -d"
+            ]' --query 'Command.CommandId' --output text)
+
+        echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
+
+    - name: Run Docker commands result
+      run: |
+        aws ssm wait command-executed \
+            --command-id ${{ env.COMMAND_ID }} \
+            --instance-id ${{ secrets.INSTANCE_ID }} || true
+
+        ssm_command_output=$(aws ssm get-command-invocation \
+            --command-id ${{ env.COMMAND_ID }} \
+            --instance-id ${{ secrets.INSTANCE_ID }})
+
+        STANDARD_ERROR_CONTENT=$(echo "$ssm_command_output" | jq -r '.StandardErrorContent')
+        STANDARD_ERROR_CONTENT=${STANDARD_ERROR_CONTENT//$'\n'/' '}
+        STATUS=$(echo "$ssm_command_output" | jq -r '.Status')
+
+        echo "STATUS=$STATUS" >> $GITHUB_ENV
+        echo "STANDARD_ERROR_CONTENT=$STANDARD_ERROR_CONTENT" >> $GITHUB_ENV
+
+    - name: Check for errors
+      run: |
+        if [[ "${{ env.STATUS }}" == "Success" ]]; then
+            echo "Commands completed successfully."
+        else
+            echo "Commands failed."
+            echo "Error: ${{ env.STANDARD_ERROR_CONTENT }}"
+            exit 1
+        fi
